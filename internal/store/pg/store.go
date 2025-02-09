@@ -3,14 +3,17 @@ package pg
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/grnsv/alice-skill/internal/store"
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Store реализует интерфейс store.Store и позволяет взаимодействовать с СУБД PostgreSQL
+// Store реализует интерфейс store.Store и позволяет взаимодействовать с СУБД PostgreSQL.
 type Store struct {
-	// Поле conn содержит объект соединения с СУБД
+	// Поле conn содержит объект соединения с СУБД.
 	conn *sql.DB
 }
 
@@ -56,7 +59,7 @@ func (s Store) Bootstrap(ctx context.Context) error {
 	return tx.Commit()
 }
 
-func (s Store) FindRecipient(ctx context.Context, username string) (userID string, err error) {
+func (s Store) FindRecepient(ctx context.Context, username string) (userID string, err error) {
 	// запрашиваем внутренний идентификатор пользователя по его имени
 	row := s.conn.QueryRowContext(ctx, `SELECT id FROM users WHERE username = $1`, username)
 	err = row.Scan(&userID)
@@ -133,6 +136,26 @@ func (s Store) SaveMessage(ctx context.Context, userID string, msg store.Message
         VALUES
         ($1, $2, $3, $4);
     `, msg.Sender, userID, msg.Payload, time.Now())
+
+	return err
+}
+
+func (s Store) RegisterUser(ctx context.Context, userID, username string) error {
+	// добавляем новую запись пользователя
+	_, err := s.conn.ExecContext(ctx, `
+        INSERT INTO users
+        (id, username)
+        VALUES
+        ($1, $2);
+    `, userID, username)
+
+	if err != nil {
+		// проверяем, что ошибка сигнализирует о потенциальном нарушении целостности данных
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgerrcode.IsIntegrityConstraintViolation(pgErr.Code) {
+			err = store.ErrConflict
+		}
+	}
 
 	return err
 }
